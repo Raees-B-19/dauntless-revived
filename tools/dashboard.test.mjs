@@ -86,8 +86,13 @@ test('moderation writes require owner authentication and same origin and never r
 test('dashboard isolates owner data and only polls read routes', async () => {
   const routes = [];
   const key = 'test-owner-key-not-a-real-secret';
-  const server = await startDashboard({key, port: 0, backend: 'http://127.0.0.1:61000', fetcher: async url => {
+  const server = await startDashboard({key, port: 0, backend: 'http://127.0.0.1:61000', fetcher: async (url, options) => {
     routes.push(url.pathname);
+    if (url.pathname === '/gameservers') {
+      assert.equal(url.port, '61001');
+      assert.equal(options.headers, undefined);
+      return Response.json({capacity:{running:4,pending:1,limit:10,cpu:{blocked:false}}});
+    }
     return {ok: true, json: async () => url.pathname.endsWith('GetAllUsers') ? {Users: [{UserId: 'fixture', Username: 'Tester'}]} : {players: [{name: 'Tester', where: 'city'}], instances: [], playersOnline: 1, uptimeSeconds: 60, name: 'Test'} };
   }});
   try {
@@ -103,7 +108,9 @@ test('dashboard isolates owner data and only polls read routes', async () => {
     assert.equal((await fetch(base + '/api/log?name=../../secrets', {headers: {'x-dashboard-key': key}})).status, 404);
     assert.equal(data.sample.locations.city, 1);
     assert.equal(data.sample.locations.hunt, 0);
-    assert.deepEqual(routes.sort(), ['/undaunted/api/BackendHealth', '/undaunted/api/DiscordKeyStats', '/undaunted/api/GetAllUsers', '/undaunted/api/ServerStatus']);
+    assert.equal(data.fleet.totals.hunts, 4);
+    assert.equal(data.fleet.rows[0].capacity.pending, 1);
+    assert.deepEqual(routes.sort(), ['/gameservers', '/undaunted/api/BackendHealth', '/undaunted/api/DiscordKeyStats', '/undaunted/api/GetAllUsers', '/undaunted/api/ServerStatus']);
   } finally { await new Promise(resolve => server.close(resolve)); }
 });
 test('redacts credential lines and caps log line count', () => {
@@ -229,4 +236,27 @@ test('account recovery requires owner authentication and is never cached',async(
    const response=await fetch(base+route,{headers:{'x-dashboard-key':key}});
    assert.equal(response.headers.get('cache-control'),'no-store');assert.equal((await response.json()).key,'fixture-login-key');assert.equal(recovered,1);
  }finally{await new Promise(resolve=>server.close(resolve));}
+});
+
+test('slow moderation completes once and account totals are cached across polls', async () => {
+  const {setTimeout: delay} = await import('node:timers/promises');
+  const key='test-owner-key-not-a-real-secret';
+  let users=0, writes=0;
+  const server=await startDashboard({key,port:0,backend:'http://127.0.0.1:61000',fetcher:async (url,options)=>{
+    if(options.method==='POST'){
+      writes++;
+      await delay(10500,undefined,{signal:options.signal});
+      return {status:200,json:async()=>({active:false})};
+    }
+    if(url.pathname.endsWith('GetAllUsers')) users++;
+    return {ok:true,json:async()=>url.pathname.endsWith('GetAllUsers')?{Users:[]}:{players:[],instances:[],playersOnline:0}};
+  }});
+  try {
+    const base='http://127.0.0.1:'+server.address().port;
+    const response=await fetch(base+'/api/moderation',{method:'POST',headers:{'x-dashboard-key':key,'content-type':'application/json',origin:base},body:JSON.stringify({accountId:'UID-fixture',active:false,reason:'test'})});
+    assert.equal(response.status,200);
+    assert.equal((await response.json()).active,false);
+    assert.equal(writes,1);
+    assert.equal(users,1);
+  } finally {await new Promise(resolve=>server.close(resolve));}
 });

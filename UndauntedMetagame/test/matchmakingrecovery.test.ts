@@ -419,3 +419,151 @@ for (const kind of ['private', 'direct', 'party'] as const) {
         assert.equal(posts.length, 2);
     });
 }
+
+for (const [header, delay] of [[null,3000],['invalid',3000],['10',10000],['999999',30000]] as const) {
+    it(`party polls honor bounded Retry-After ${header} without duplicate launches`, async () => {
+        deploy = async () => { const response=full(); if(header!==null)response.headers.set('Retry-After',header); return response; };
+        await formParty();
+        await HandlePlayerMatchmaking('ISLAND','',HUNT,A);
+        await flush();
+        assert.equal(posts.length,1);
+        now += delay-1;
+        TouchPlayer(A); TouchPlayer(B);
+        await Promise.all([CheckAndUpdateQueueStatus(A),CheckAndUpdateQueueStatus(B),CheckAndUpdateQueueStatus(A)]);
+        assert.equal(posts.length,1);
+        const pending=deferred<Response>(); deploy=()=>pending.promise;
+        now += 1;
+        const polls=Promise.all([CheckAndUpdateQueueStatus(A),CheckAndUpdateQueueStatus(B),CheckAndUpdateQueueStatus(A)]);
+        await flush();
+        assert.equal(posts.length,2);
+        pending.resolve(ready());
+        await polls;
+        assert.equal((await CheckAndUpdateQueueStatus(A))?.Ready,true);
+        assert.equal((await CheckAndUpdateQueueStatus(B))?.Ready,true);
+    });
+}
+
+it('Ramsgate capacity waits retain a polling player for twenty minutes, then admit them', async () => {
+    deploy = async () => full();
+    await HandlePlayerMatchmaking('CITY', '', CITY, A);
+    await flush();
+    const candidate = (await CheckAndUpdateQueueStatus(A))!.CandidateId;
+    for (let elapsed = 0; elapsed < 20 * 60; elapsed += 10) {
+        now += 10000;
+        const result = await DecideCandidateStatus(A);
+        assert.equal(result.Kind, 'matching');
+        assert.equal((await CheckAndUpdateQueueStatus(A))?.CandidateId, candidate);
+    }
+    deploy = async () => ready();
+    now += 10000;
+    assert.equal((await DecideCandidateStatus(A)).Kind, 'travel');
+    assert.equal((await CheckAndUpdateQueueStatus(A))?.CandidateId, candidate);
+});
+
+it('a later Ramsgate request cannot overtake the oldest waiting player', async () => {
+    deploy = async () => full();
+    await HandlePlayerMatchmaking('CITY', '', CITY, A);
+    await flush();
+    now += 1000;
+    deploy = async () => ready();
+    await HandlePlayerMatchmaking('CITY', '', CITY, B);
+    await flush();
+    assert.equal(posts.length, 1);
+    now += 10000;
+    assert.equal((await CheckAndUpdateQueueStatus(B))?.Ready, false);
+    assert.equal(posts.length, 1);
+    assert.equal((await CheckAndUpdateQueueStatus(A))?.Ready, true);
+    assert.equal(posts[1].ExpectedPlayers[0], A);
+    now += 10000;
+    assert.equal((await CheckAndUpdateQueueStatus(B))?.Ready, true);
+    assert.equal(posts[2].ExpectedPlayers[0], B);
+});
+
+it('full Ramsgate capacity does not prevent a hunt allocation', async () => {
+    deploy = async body => body.GameMode === 'CITY' ? full() : ready();
+    await HandlePlayerMatchmaking('CITY', '', CITY, A);
+    await flush();
+    assert.equal((await startHunt(B))?.Ready, true);
+    assert.equal((await CheckAndUpdateQueueStatus(A))?.Ready, false);
+    assert.deepEqual(posts.map(body => body.GameMode), ['CITY', 'ISLAND']);
+});
+
+it('cancelling the oldest Ramsgate waiter releases the next player', async () => {
+    deploy = async () => full();
+    await HandlePlayerMatchmaking('CITY', '', CITY, A);
+    await flush();
+    now += 1000;
+    await HandlePlayerMatchmaking('CITY', '', CITY, B);
+    await flush();
+    assert.equal(posts.length, 1);
+    CancelMatchmaking(A);
+    deploy = async () => ready();
+    now += 10000;
+    assert.equal((await CheckAndUpdateQueueStatus(B))?.Ready, true);
+    assert.equal(await CheckAndUpdateQueueStatus(A), undefined);
+    assert.equal(posts.length, 2);
+    assert.deepEqual(posts[1].ExpectedPlayers, [B]);
+});
+
+it('actively polling parties retain capacity queue membership beyond five minutes', async () => {
+    await formParty();
+    deploy = async () => full();
+    await HandlePlayerMatchmaking('ISLAND', '', HUNT, A);
+    await flush();
+    const candidate = GetPartyOf(A)!.Candidate!;
+    const createdAt = candidate.CreatedAt;
+    for (let elapsed = 0; elapsed < 20 * 60; elapsed += 10) {
+        now += 10000;
+        TouchPlayer(A); TouchPlayer(B);
+        await PollParty(A);
+        await PollParty(B);
+        assert.equal(GetPartyOf(A)?.Candidate?.CandidateId, candidate.CandidateId);
+        assert.equal((await DecideCandidateStatus(A)).Kind, 'matching');
+        assert.equal((await DecideCandidateStatus(B)).Kind, 'matching');
+        assert.equal(candidate.CreatedAt, createdAt);
+    }
+    deploy = async () => ready();
+    now += 10000;
+    assert.equal((await DecideCandidateStatus(A)).Kind, 'travel');
+    assert.equal((await DecideCandidateStatus(B)).Kind, 'travel');
+    assert.equal(candidate.CapacityDeadline, undefined);
+});
+
+it('party polling without matchmaking polls cannot keep a capacity lease alive', async () => {
+    await formParty();
+    deploy = async () => full();
+    await HandlePlayerMatchmaking('ISLAND', '', HUNT, A);
+    await flush();
+    assert.ok(GetPartyOf(A)?.Candidate);
+    for (let elapsed = 0; elapsed < 70; elapsed += 10) {
+        now += 10000;
+        TouchPlayer(A); TouchPlayer(B);
+        await PollParty(A);
+        await PollParty(B);
+    }
+    assert.equal(GetPartyOf(A)?.Candidate, null);
+    assert.equal((await DecideCandidateStatus(A)).Kind, 'failed');
+    assert.equal((await DecideCandidateStatus(B)).Kind, 'failed');
+});
+
+it('an orphaned party capacity retry fails its entries and releases the next hunt', async () => {
+    await formParty();
+    deploy = async () => full();
+    await HandlePlayerMatchmaking('ISLAND', '', HUNT, A);
+    await flush();
+    const old = (await CheckAndUpdateQueueStatus(A))!.CandidateId;
+    // Simulate the old party expiry path independently of the new lease guard.
+    GetPartyOf(A)!.Candidate = null;
+    const nextPlayer = 'UID-recovery-next';
+    now += 1000;
+    await startHunt(nextPlayer);
+    assert.equal(posts.length, 1);
+    deploy = async () => ready();
+    now += 10000;
+    assert.equal((await DecideCandidateStatus(A)).Kind, 'failed');
+    assert.equal((await DecideCandidateStatus(B)).Kind, 'failed');
+    assert.equal((await CheckAndUpdateQueueStatus(A))?.CandidateId, old);
+    assert.equal((await CheckAndUpdateQueueStatus(nextPlayer))?.Ready, true);
+    assert.equal(posts.length, 2);
+    assert.deepEqual(posts[1].ExpectedPlayers, [nextPlayer]);
+});
