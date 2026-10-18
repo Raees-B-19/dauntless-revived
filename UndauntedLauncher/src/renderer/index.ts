@@ -1262,7 +1262,9 @@ function modCard(by: StringKey, m: ModInfo): HTMLElement {
   const name = h("strong", { class: "mod-name", id: m.id ? `mod-${m.id}-name` : undefined }, icon(m.icon), t(m.name));
   return h("div", { class: "mod-card" },
     h("span", { class: "mod-by" }, t(by)),
-    m.id ? h("div", { class: "mod-head" }, name, modSwitch(m.id, `mod-${m.id}-name`)) : name,
+    name,
+    // On its own row under the name, so a long name never squeezes it.
+    m.id ? h("div", { class: "mod-toggle" }, modSwitch(m.id, `mod-${m.id}-name`)) : null,
     h("span", { class: "mod-text" }, t(m.text)),
     h("span", { class: "mod-use" }, t(m.use)),
     m.made ? h("span", { class: "mod-use" }, t(m.made)) : null,

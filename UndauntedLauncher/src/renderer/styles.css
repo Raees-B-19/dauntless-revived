@@ -1529,7 +1529,7 @@ img {
 .mod-text { color: var(--dr-frost); }
 .mod-use { color: var(--dr-steel); font-size: 12px; }
 .mods-credit { text-align: center; }
-.mod-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.mod-toggle { display: flex; }
 .switch:disabled { opacity: 0.5; }
 .mods-loader { display: flex; align-items: center; gap: 8px; font-weight: 600; }
 .mods-linux-summary { display: flex; align-items: center; gap: 16px; cursor: pointer; list-style: none; border-radius: 8px; }
