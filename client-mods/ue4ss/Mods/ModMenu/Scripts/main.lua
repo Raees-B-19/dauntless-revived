@@ -35,7 +35,7 @@ local HIDDEN = {
 }
 -- Friendlier names for known mods (anything else shows its folder name).
 local DISPLAY = {BehemothHealthBars = "Behemoth Health Bars", BehemothTracker = "Behemoth Tracker",
-                  CraftStar = "Uncrafted Weapons"}
+                  CraftStar = "Uncrafted Weapons", HuntAgain = "Hunt Again"}
 
 -- The SETTINGS section. Keys and defaults must match the mods that read them.
 local SETTINGS = {

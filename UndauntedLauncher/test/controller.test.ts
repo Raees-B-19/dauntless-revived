@@ -1352,3 +1352,34 @@ test("connected launcher refreshes news without restarting and bounds polling", 
     assert.equal(count(), before + 1);
   } finally { content.opts.news = previous; await hx.c.shutdown(); }
 });
+
+test("Mods page: only a listed mod and a real on/off change mods.txt; Linux reports whether the launcher can load mods", async () => {
+  const hx = harness();
+  const previous = process.env.WINEDLLOVERRIDES;
+  try {
+    await hx.c.init();
+    assert.equal((await hx.c.modsState()).switches, null, "no mods.txt yet: nothing to switch");
+    const file = path.join(hx.installDir, "Archon", "Binaries", "Win64", "ue4ss", "Mods", "mods.txt");
+    mkdirSync(path.dirname(file), { recursive: true });
+    const text = "CraftStar : 1\nHuntAgain : 0\nKeybinds : 1\n";
+    writeFileSync(file, text);
+    assert.deepEqual((await hx.c.setModSwitch("CraftStar", false)).switches, { HuntAgain: false, BehemothHealthBars: false });
+    await hx.c.setModSwitch("HuntAgain", "yes");
+    await hx.c.setModSwitch("../HuntAgain", true);
+    assert.equal(readFileSync(file, "utf8"), text, "unlisted names and non-boolean values change nothing");
+    assert.deepEqual((await hx.c.setModSwitch("HuntAgain", true)).switches, { HuntAgain: true, BehemothHealthBars: false });
+    assert.equal(readFileSync(file, "utf8"), "CraftStar : 1\nHuntAgain : 1\nKeybinds : 1\n");
+    assert.deepEqual((await hx.c.setModSwitch("BehemothHealthBars", true)).switches, { HuntAgain: true, BehemothHealthBars: true });
+    assert.equal(readFileSync(file, "utf8"), "BehemothHealthBars : 1\nCraftStar : 1\nHuntAgain : 1\nKeybinds : 1\n", "a listed mod without a line gets one");
+
+    delete process.env.WINEDLLOVERRIDES;
+    const off = await hx.c.modsState();
+    assert.equal(off.loaderOn, off.linux ? false : true);
+    process.env.WINEDLLOVERRIDES = "dwmapi=n,b";
+    assert.equal((await hx.c.modsState()).loaderOn, true);
+  } finally {
+    if (previous === undefined) delete process.env.WINEDLLOVERRIDES;
+    else process.env.WINEDLLOVERRIDES = previous;
+    await hx.c.shutdown();
+  }
+});

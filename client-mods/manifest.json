@@ -231,6 +231,12 @@
                       "keep":  false
                   },
                   {
+                      "path":  "ue4ss/Mods/HuntAgain/Scripts/main.lua",
+                      "sha256":  "66ec44ce2175217746ba0a343dce4097ff4945d01688800c27508b275ae7a0c8",
+                      "size":  8196,
+                      "keep":  false
+                  },
+                  {
                       "path":  "ue4ss/Mods/Keybinds/Scripts/main.lua",
                       "sha256":  "297dd6f7f560e1cebc15cd4509ad481495d9179f5758a8034be4c417a369803a",
                       "size":  4190,
@@ -238,14 +244,14 @@
                   },
                   {
                       "path":  "ue4ss/Mods/ModMenu/Scripts/main.lua",
-                      "sha256":  "3b5de41871636d4e94b32ca516904739dacbb973e049aa5d916d2718ce7a1199",
-                      "size":  27026,
+                      "sha256":  "e928a8130133154f04698b0f02eafb1c1569c429b67de80e030c1a7754293d82",
+                      "size":  27052,
                       "keep":  false
                   },
                   {
                       "path":  "ue4ss/Mods/mods.txt",
-                      "sha256":  "b4204bff94ce95caef3f00cabe7be3e3fc5f382597f9878aeb8cf4d19e9604b4",
-                      "size":  121,
+                      "sha256":  "c55e0d37099db5a1c9c4ea1646337928c67ae9a953eac1f0eee4917f0a86a479",
+                      "size":  135,
                       "keep":  true
                   },
                   {

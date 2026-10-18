@@ -1,7 +1,8 @@
-BehemothHealthBars : 1
+BehemothHealthBars : 0
 ModMenu : 1
 BehemothTracker : 1
 CraftStar : 1
+HuntAgain : 0
 
 
 ; Built-in keybinds, do not move up!

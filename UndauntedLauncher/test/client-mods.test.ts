@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { disableModLines, insideRoot, installClientMods, safeRelative } from "../src/main/client-mods";
+import { disableModLines, dwmapiNativeFirst, insideRoot, installClientMods, modSwitchOn, readModSwitches, safeRelative, setModSwitchLine, writeModSwitch } from "../src/main/client-mods";
 
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 
@@ -142,4 +142,56 @@ test("upgrading adds CraftStar once, preserving disabled mods and Keybinds order
     await installClientMods(t.res, t.game);
     assert.equal(readFileSync(t.at(mods), "utf8"), expected.replace("CraftStar : 1", "CraftStar : 0"));
   } finally { rmSync(t.root, { recursive: true, force: true }); }
+});
+
+test("the shipped mods.txt has Hunt Again off, and an upgrade adds it off without touching the player's switches", async () => {
+  const shipped = readFileSync(path.resolve(__dirname, "..", "..", "..", "client-mods", "ue4ss", "Mods", "mods.txt"), "utf8");
+  assert.match(shipped, /^HuntAgain : 0$/m);
+  assert.match(shipped, /^BehemothHealthBars : 0$/m, "new installs start with the health bars off");
+  assert.ok(shipped.indexOf("HuntAgain") < shipped.indexOf("Keybinds"), "Hunt Again stays above the built-in Keybinds");
+  const mods = "ue4ss/Mods/mods.txt";
+  const t = setup({ [mods]: shipped }, [mods], []);
+  try {
+    t.put(mods, "BehemothHealthBars : 0\r\nModMenu : 1\r\nBehemothTracker : 1\r\nCraftStar : 1\r\nKeybinds : 1\r\n");
+    await installClientMods(t.res, t.game);
+    assert.equal(readFileSync(t.at(mods), "utf8"), "HuntAgain : 0\r\nBehemothHealthBars : 0\r\nModMenu : 1\r\nBehemothTracker : 1\r\nCraftStar : 1\r\nKeybinds : 1\r\n");
+    t.put(mods, "HuntAgain : 1\nKeybinds : 1\n");
+    await installClientMods(t.res, t.game);
+    assert.match(readFileSync(t.at(mods), "utf8"), /^HuntAgain : 1$/m, "a player's own Hunt Again switch is kept");
+  } finally { rmSync(t.root, { recursive: true, force: true }); }
+});
+
+test("the Mods page switch changes only its own mods.txt line", () => {
+  const text = "BehemothHealthBars : 0\r\nHuntAgain : 0\r\n; HuntAgain : 1\r\n\r\nKeybinds : 1\r\n";
+  assert.equal(modSwitchOn(text, "HuntAgain"), false);
+  const on = setModSwitchLine(text, "HuntAgain", true);
+  assert.equal(on, text.replace("HuntAgain : 0", "HuntAgain : 1"), "comments, other mods and CRLF line endings stay");
+  assert.equal(modSwitchOn(on, "huntagain"), true);
+  assert.equal(setModSwitchLine(on, "HuntAgain", false), text);
+  assert.equal(setModSwitchLine("Keybinds : 1\n", "HuntAgain", true), "HuntAgain : 1\nKeybinds : 1\n", "a missing line is added at the top");
+  assert.equal(modSwitchOn("Keybinds : 1\n", "HuntAgain"), false, "no line means off");
+});
+
+test("Mods page switches read and write the game's mods.txt, and need one to exist", async () => {
+  const t = setup({ "ue4ss/UE4SS.dll": "dll" }, [], []);
+  try {
+    assert.equal(await readModSwitches(t.game, ["HuntAgain"]), null);
+    assert.equal(await writeModSwitch(t.game, "HuntAgain", true), false);
+    assert.equal(existsSync(t.at("ue4ss/Mods/mods.txt")), false, "no mods.txt is created");
+    t.put("ue4ss/Mods/mods.txt", "HuntAgain : 0\nKeybinds : 1\n");
+    assert.deepEqual(await readModSwitches(t.game, ["HuntAgain"]), { HuntAgain: false });
+    assert.equal(await writeModSwitch(t.game, "HuntAgain", true), true);
+    assert.equal(readFileSync(t.at("ue4ss/Mods/mods.txt"), "utf8"), "HuntAgain : 1\nKeybinds : 1\n");
+    assert.deepEqual(await readModSwitches(t.game, ["HuntAgain"]), { HuntAgain: true });
+    assert.equal(await writeModSwitch(t.game, "Bad Name\nKeybinds", false), false, "only plain mod names");
+  } finally { rmSync(t.root, { recursive: true, force: true }); }
+});
+
+test("mods load under Wine only when WINEDLLOVERRIDES puts the native dwmapi first", () => {
+  for (const on of ["dwmapi=n,b", "dwmapi=n", "dxgi=n,b;dwmapi=n,b", " DWMAPI.dll = n,b ", "d3d11,dwmapi=n,b", "dwmapi=b;dwmapi=n,b"]) {
+    assert.equal(dwmapiNativeFirst(on), true, on);
+  }
+  for (const off of [undefined, "", "dxgi=n,b", "dwmapi=b", "dwmapi=b,n", "dwmapi=", "dwmapi=n,b;dwmapi=b", "notdwmapi=n,b"]) {
+    assert.equal(dwmapiNativeFirst(off), false, String(off));
+  }
 });

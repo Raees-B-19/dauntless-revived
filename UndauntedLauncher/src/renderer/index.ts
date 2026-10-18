@@ -13,7 +13,7 @@ import { checkUsername, extractAccountKey } from "../shared/username";
 import { exposureKey, graphicsKey, primaryButton, shortFile, stepIndex, taskView, updateReason, whereKey } from "../shared/ui-model";
 import { formatBytes, formatDate, formatDuration, formatRunningTime } from "../shared/format";
 import { sortInstances, type InstanceKind, type ServerStatus, type StatusInstance } from "../shared/status";
-import { EXPOSURE_MODES, GAME_LANGUAGES, GRAPHICS_PRESETS, LANGUAGES, type Branding, type ExposureMode, type ExternalTarget, type GameLanguage, type GraphicsPreset, type Language, type LauncherError, type NewsItem, type OfflinePhase, type OfflineStatus, type Snapshot, type TaskProgress } from "../shared/types";
+import { EXPOSURE_MODES, GAME_LANGUAGES, GRAPHICS_PRESETS, LANGUAGES, type Branding, type ExposureMode, type ExternalTarget, type GameLanguage, type GraphicsPreset, type Language, type LauncherError, type ModsState, type NewsItem, type OfflinePhase, type OfflineStatus, type Snapshot, type SwitchableMod, type TaskProgress } from "../shared/types";
 
 type View = "play" | "news" | "server" | "settings" | "partners" | "mods" | "credits";
 const VIEWS: readonly View[] = ["play", "news", "server", "settings", "partners", "mods", "credits"];
@@ -41,6 +41,8 @@ const state = {
   username: "",
   keyFormOpen: false,
   offline: { phase: "stopped" } as OfflineStatus, // the local runtime's last status
+  mods: null as ModsState | null, // the Mods page's switches and Linux mod status, read when the page opens
+  linuxModsOpen: false, // the Mods page's "Mods on Linux" card is unfolded
   offlineView: false, // the Play page shows offline play instead of the online server
   offlineName: "", // the first-run offline username being typed
   playMenu: false, // the PLAY button's dropdown is open
@@ -1214,17 +1216,91 @@ function renderPartners(): void {
 
 // ------------------------------------------------------------------ mods page
 
-// The optional client mods (client-mods/ in the repository, by ZFXSTATIC): what each one does.
-// Information only; the launcher installs them and the in-game Mod Menu switches them.
-const MODS: readonly { icon: IconName; name: StringKey; text: StringKey; use: StringKey }[] = [
+// One client mod's card. A mod with an id gets an on/off switch: it writes the game's
+// ue4ss/Mods/mods.txt, the same file the in-game Mod Menu writes (SWITCHABLE_MODS in shared/types.ts).
+type ModInfo = { id?: SwitchableMod; icon: IconName; name: StringKey; text: StringKey; use: StringKey; made?: StringKey };
+
+// ZFXSTATIC's client mods (client-mods/ in the repository): what each one does. The launcher installs
+// them; the in-game Mod Menu switches them, and Behemoth Health Bars (off by default) also here.
+const MODS: readonly ModInfo[] = [
   { icon: "puzzle", name: "mod_cst_name", text: "mod_cst_text", use: "mod_cst_use" },
-  { icon: "heart", name: "mod_bhb_name", text: "mod_bhb_text", use: "mod_bhb_use" },
+  { id: "BehemothHealthBars", icon: "heart", name: "mod_bhb_name", text: "mod_bhb_text", use: "mod_bhb_use" },
   { icon: "hunt", name: "mod_trk_name", text: "mod_trk_text", use: "mod_trk_use" },
   { icon: "settings", name: "mod_menu_name", text: "mod_menu_text", use: "mod_menu_use" },
 ];
 
+// RB's mods: off until switched on here.
+const RB_MODS: readonly ModInfo[] = [
+  { id: "HuntAgain", icon: "refresh", name: "mod_ha_name", text: "mod_ha_text", use: "mod_ha_use", made: "mod_ha_made" },
+];
+
+// A failed call answers { ok: false } instead of a ModsState: keep the last real state then.
+function takeMods(m: unknown): void {
+  if (typeof m === "object" && m !== null && "loaderOn" in m) state.mods = m as ModsState;
+}
+
+async function loadMods(): Promise<void> {
+  takeMods(await api.getMods().catch(() => null));
+  if (state.view === "mods") renderMods();
+}
+
+function modSwitch(id: SwitchableMod, labelId: string): HTMLElement {
+  const switches = state.mods?.switches ?? null;
+  const sw = h("button", { type: "button", class: "switch", role: "switch", "aria-checked": switches?.[id] ? "true" : "false", "aria-labelledby": labelId, "data-fk": `mod-${id}`, disabled: switches === null });
+  // Redrawn from the answer even when nothing changed, so a failed write puts the switch back.
+  onToggle(sw, (on) =>
+    void api.setModSwitch(id, on).catch(() => null).then((m) => {
+      takeMods(m);
+      forceRender($("#view-mods"));
+      if (state.view === "mods") renderMods();
+    }),
+  );
+  return sw;
+}
+
+function modCard(by: StringKey, m: ModInfo): HTMLElement {
+  const name = h("strong", { class: "mod-name", id: m.id ? `mod-${m.id}-name` : undefined }, icon(m.icon), t(m.name));
+  return h("div", { class: "mod-card" },
+    h("span", { class: "mod-by" }, t(by)),
+    m.id ? h("div", { class: "mod-head" }, name, modSwitch(m.id, `mod-${m.id}-name`)) : name,
+    h("span", { class: "mod-text" }, t(m.text)),
+    h("span", { class: "mod-use" }, t(m.use)),
+    m.made ? h("span", { class: "mod-use" }, t(m.made)) : null,
+    m.id ? h("span", { class: "mod-use" }, t(state.mods && !state.mods.switches ? "mods_switch_missing" : "mods_switch_apply")) : null,
+  );
+}
+
+// How mods load on Linux (WINEDLLOVERRIDES=dwmapi=n,b), with the commands to copy, folded away until
+// opened; on Linux the closed card still shows whether this launcher was started that way.
+function linuxModsCard(): HTMLElement {
+  const m = state.mods;
+  const run = `env WINEDLLOVERRIDES=dwmapi=n,b ./DauntlessRevivedLauncher-${state.snap?.app.version ?? "<version>"}-linux-x86_64.AppImage`;
+  const details = h("details", { class: "mods-linux-details", open: state.linuxModsOpen },
+    h("summary", { class: "mods-linux-summary", "data-fk": "mods-linux" },
+      h("h2", { class: "mods-linux-title" }, icon("monitor"), t("mods_linux_title")),
+      m?.linux
+        ? h("span", { class: "mods-loader" }, h("span", { class: `dot ${m.loaderOn ? "online" : "offline"}`, "aria-hidden": "true" }), t(m.loaderOn ? "mods_linux_on" : "mods_linux_off"))
+        : null,
+      icon("chevron_down", "icon mods-chevron"),
+    ),
+    h("p", { class: "card-text" }, t("mods_linux_made")),
+    h("p", { class: "card-text" }, t("mods_linux_what")),
+    h("ol", { class: "mods-steps" },
+      h("li", {}, t("mods_linux_step1")),
+      h("li", {}, t("mods_linux_step2"), h("code", { class: "mods-cmd mono selectable" }, run)),
+      h("li", {}, t("mods_linux_step3"), h("code", { class: "mods-cmd mono selectable" }, "env WINEDLLOVERRIDES=dwmapi=n,b ")),
+      h("li", {}, t("mods_linux_step4")),
+    ),
+    h("p", { class: "card-text" }, t("mods_linux_off_how")),
+    h("p", { class: "small-print" }, t("mods_linux_update")),
+  );
+  // Kept across redraws (a switch click redraws the page).
+  details.addEventListener("toggle", () => { state.linuxModsOpen = details.open; });
+  return card("mods-linux", details);
+}
+
 function renderMods(): void {
-  renderRegion($("#view-mods"), state.lang, () => [
+  renderRegion($("#view-mods"), `${state.lang}|${state.snap?.app.version}|${JSON.stringify(state.mods)}`, () => [
     h("div", { class: "page mods-page" },
       h("h1", { class: "page-title", id: "mods-title" }, t("nav_mods")),
       h("p", { class: "page-sub" }, t("mods_subtitle")),
@@ -1233,17 +1309,16 @@ function renderMods(): void {
         h("span", { class: "badge mods-badge" }, t("mods_badge")),
         h("h2", { class: "mods-title" }, t("mods_title")),
         h("p", { class: "card-text mods-intro" }, t("mods_intro")),
-        h("div", { class: "mods-grid" },
-          ...MODS.map((m) =>
-            h("div", { class: "mod-card" },
-              h("span", { class: "mod-by" }, t("mods_by")),
-              h("strong", { class: "mod-name" }, icon(m.icon), t(m.name)),
-              h("span", { class: "mod-text" }, t(m.text)),
-              h("span", { class: "mod-use" }, t(m.use)),
-            ),
-          ),
-        ),
+        h("div", { class: "mods-grid" }, ...MODS.map((m) => modCard("mods_by", m))),
       ),
+      card(
+        "mods-author",
+        h("span", { class: "badge mods-badge" }, t("mods_rb_badge")),
+        h("h2", { class: "mods-title" }, t("mods_rb_title")),
+        h("p", { class: "card-text mods-intro" }, t("mods_rb_intro")),
+        h("div", { class: "mods-grid" }, ...RB_MODS.map((m) => modCard("mods_rb_by", m))),
+      ),
+      linuxModsCard(),
       card("",
         h("h2", { class: "card-title" }, icon("info"), t("mods_notes_title")),
         h("p", { class: "card-text" }, t("mods_note_local")),
@@ -1903,6 +1978,7 @@ function setView(v: View): void {
   // Partners and Mods pages have long content and get the room too.
   $(".world").classList.toggle("no-panel", v === "server" || v === "credits" || v === "partners" || v === "mods");
   renderAll();
+  if (v === "mods") void loadMods();
   if (changed && !reducedMotion.matches) {
     const selected = $(`#view-${v}`);
     selected.classList.remove("view-entering");

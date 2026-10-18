@@ -221,3 +221,84 @@ export function addMissingModLines(text: string, defaults: string): string {
   const eol = text.includes("\r\n") ? "\r\n" : "\n";
   return missing.length ? missing.join(eol) + eol + text : text;
 }
+
+// ------------------------------------------------------------------ Mods page switches
+// Separate from the install code above (which never changes a player's switches): the launcher's
+// Mods page reads and flips single mods here, in the same mods.txt the in-game Mod Menu writes.
+
+const MOD_LINE = /^([ \t]*)([A-Za-z0-9_]+)([ \t]*:[ \t]*)([01])([ \t]*)(\r?)$/gm;
+
+function modsTxtFile(installDir: string): string {
+  return path.join(path.resolve(win64Dir(installDir)), "ue4ss", "Mods", "mods.txt");
+}
+
+// The mod's switch in mods.txt text: true for "Name : 1", false for "Name : 0" or no line at all
+// (a mod without a line is not loaded).
+export function modSwitchOn(text: string, name: string): boolean {
+  for (const m of text.matchAll(MOD_LINE)) {
+    if (m[2].toLowerCase() === name.toLowerCase()) return m[4] === "1";
+  }
+  return false;
+}
+
+// Sets the mod's line to "Name : 1" or "Name : 0", keeping every other line, the order and the line
+// endings. A mod without a line gets one at the top, as addMissingModLines adds new mods.
+export function setModSwitchLine(text: string, name: string, on: boolean): string {
+  let found = false;
+  const out = text.replace(MOD_LINE, (line, pre: string, n: string, sep: string, _v: string, post: string, cr: string) => {
+    if (n.toLowerCase() !== name.toLowerCase()) return line;
+    found = true;
+    return `${pre}${n}${sep}${on ? "1" : "0"}${post}${cr}`;
+  });
+  if (found) return out;
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  return `${name} : ${on ? "1" : "0"}${eol}${text}`;
+}
+
+// Each named mod's switch in the game's mods.txt, or null when there is no mods.txt yet (the game
+// is not installed, or the launcher has not installed the mods into it).
+export async function readModSwitches<N extends string>(installDir: string, names: readonly N[]): Promise<Record<N, boolean> | null> {
+  let text: string;
+  try {
+    text = await fsp.readFile(modsTxtFile(installDir), "utf8");
+  } catch {
+    return null;
+  }
+  const out = {} as Record<N, boolean>;
+  for (const n of names) out[n] = modSwitchOn(text, n);
+  return out;
+}
+
+// Switches one mod in the game's mods.txt. False when there is no mods.txt to change. Callers pass
+// only names from a fixed list.
+export async function writeModSwitch(installDir: string, name: string, on: boolean): Promise<boolean> {
+  if (!/^[A-Za-z0-9_]+$/.test(name)) return false;
+  const file = modsTxtFile(installDir);
+  let text: string;
+  try {
+    text = await fsp.readFile(file, "utf8");
+  } catch {
+    return false;
+  }
+  const next = setModSwitchLine(text, name, on);
+  if (next === text) return true;
+  // Its own temp name: a quick second click, or an install writing mods.txt.new, never shares it.
+  const tmp = `${file}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.new`;
+  await fsp.writeFile(tmp, next, "utf8");
+  await fsp.rename(tmp, file);
+  return true;
+}
+
+// True when WINEDLLOVERRIDES makes Wine load the dwmapi.dll next to the game exe first ("dwmapi=n,b"
+// or "dwmapi=n"). That file is UE4SS's loader: without it Wine uses its built-in dwmapi.dll and no
+// mod loads. Entries are "name[,name]=mode" separated by ";"; the last one naming dwmapi counts.
+export function dwmapiNativeFirst(overrides: string | undefined): boolean {
+  let native = false;
+  for (const entry of (overrides ?? "").split(";")) {
+    const eq = entry.indexOf("=");
+    if (eq < 0) continue;
+    const names = entry.slice(0, eq).split(",").map((n) => n.trim().toLowerCase().replace(/^\*/, "").replace(/\.dll$/, ""));
+    if (names.includes("dwmapi")) native = entry.slice(eq + 1).trim().toLowerCase().startsWith("n");
+  }
+  return native;
+}

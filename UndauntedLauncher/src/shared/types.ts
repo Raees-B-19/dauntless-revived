@@ -218,6 +218,19 @@ export interface NewsItem {
   body: string;
 }
 
+// Client mods the launcher's Mods page switches on and off (their line in the game's
+// ue4ss/Mods/mods.txt, the file the in-game Mod Menu writes too). Only these names are accepted.
+export const SWITCHABLE_MODS = ["HuntAgain", "BehemothHealthBars"] as const;
+export type SwitchableMod = (typeof SWITCHABLE_MODS)[number];
+
+export interface ModsState {
+  linux: boolean;
+  // UE4SS can load: always on Windows; on Linux only when the launcher was started with
+  // WINEDLLOVERRIDES=dwmapi=n,b (the main process reads its own environment).
+  loaderOn: boolean;
+  switches: Record<SwitchableMod, boolean> | null; // null: no mods.txt yet (game not installed)
+}
+
 export interface Branding {
   backgrounds: { url: string; credit: string | null }[]; // app-internal dr-art:// URLs
   accent: string | null;
@@ -293,6 +306,8 @@ export const IPC = {
   dismissError: "dr:dismiss-error",
   offlineExportSave: "dr:offline-export-save",
   offlineImportSave: "dr:offline-import-save",
+  getMods: "dr:get-mods",
+  setModSwitch: "dr:set-mod-switch",
   // events
   inviteLink: "dr:invite-link",
   offlineStatusChanged: "dr:offline-status-changed",

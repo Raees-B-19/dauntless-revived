@@ -414,6 +414,8 @@ function registerIpc(c: Controller): void {
   });
   handle(IPC.stopOffline, () => c.stopOffline());
   handle(IPC.offlineStatus, () => c.offlineStatus());
+  handle(IPC.getMods, () => c.modsState());
+  handle(IPC.setModSwitch, (_e, name, on) => c.setModSwitch(name, on));
   handle(IPC.setSettings, (_e, patch) => {
     const p = settingsPatch(patch);
     return p === null ? c.setSettings({}) : c.setSettings(p);

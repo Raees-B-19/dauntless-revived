@@ -34,16 +34,18 @@ import type {
   InviteCheck,
   Language,
   LauncherError,
+  ModsState,
   NewsItem,
   NoticeCode,
   Phase,
   RegisterOutcome,
   Settings,
+  SwitchableMod,
   Snapshot,
   TaskProgress,
   OfflineStatus,
 } from "../shared/types";
-import { EXPOSURE_MODES, GAME_LANGUAGES, GRAPHICS_PRESETS, LANGUAGES } from "../shared/types";
+import { EXPOSURE_MODES, GAME_LANGUAGES, GRAPHICS_PRESETS, LANGUAGES, SWITCHABLE_MODS } from "../shared/types";
 import type { Endpoint } from "./http";
 import {
   fetchBrandingImage,
@@ -60,7 +62,7 @@ import { compareManifests, resolveInside, type GameManifest, type ManifestFile }
 import { contentDownloadBase, DownloadError, DownloadJob } from "./downloader";
 import { AbortedError, hashFile, removePartFiles, verifyInstall, VerifiedCache } from "./verify";
 import { dllStatus, installPinnedDlls, DllError, win64Dir } from "./dlls";
-import { installClientMods } from "./client-mods";
+import { dwmapiNativeFirst, installClientMods, readModSwitches, writeModSwitch } from "./client-mods";
 import { applyGameConfig } from "./engineini";
 import { locateExistingGame } from "./game-folder";
 import { buildLaunchArgs, describeLaunch, GameProcess, gameLocale, type LaunchRuntime, type SpawnFn } from "./launch";
@@ -1007,6 +1009,29 @@ export class Controller {
   async openGameFolder(): Promise<void> {
     const dir = this.installDir;
     if (existsSync(dir)) await this.p.openPath(dir);
+  }
+
+  // ------------------------------------------------------------------ client mods (Mods page)
+
+  async modsState(): Promise<ModsState> {
+    const linux = this.hostPlatform === "linux";
+    return {
+      linux,
+      loaderOn: !linux || dwmapiNativeFirst(process.env.WINEDLLOVERRIDES),
+      switches: await readModSwitches(this.installDir, SWITCHABLE_MODS),
+    };
+  }
+
+  // The page sends any name and value: only a listed mod and a real boolean change mods.txt.
+  async setModSwitch(name: unknown, on: unknown): Promise<ModsState> {
+    if (SWITCHABLE_MODS.includes(name as SwitchableMod) && typeof on === "boolean") {
+      try {
+        if (await writeModSwitch(this.installDir, name as SwitchableMod, on)) log.info(`mods.txt: ${String(name)} ${on ? "on" : "off"}`);
+      } catch (e) {
+        log.warn(`mods.txt not changed: ${describeError(e)}`);
+      }
+    }
+    return this.modsState();
   }
 
   // ------------------------------------------------------------------ install / repair

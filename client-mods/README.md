@@ -4,6 +4,7 @@ Optional client-side mods, installed automatically next to the game exe (`Archon
 
 - **UE4SS 3.0.1** (`dwmapi.dll`, `ue4ss/UE4SS.dll`; MIT, see `ue4ss/LICENSE`): the Lua mod loader.
 - **Behemoth Health Bars**: a fixed HP and shield bar at the bottom of the screen (two bars when two behemoths are up).
+  Off on new installs (`BehemothHealthBars : 0`): switched on from the launcher's Mods page or the in-game Mod Menu.
 - **Behemoth Tracker**: an arrow and distance to the behemoth in the top right.
 - **Mod Menu**: Home opens it, Up/Down (or PgUp/PgDn) choose, End flips the chosen switch. MODS turns
   whole mods on or off (applied on Ctrl+R); SETTINGS changes the mods live (shield bar, HP numbers,
@@ -11,13 +12,18 @@ Optional client-side mods, installed automatically next to the game exe (`Archon
   `ue4ss/Mods/shared/ModSettings/settings.txt` on each PC and never shipped or overwritten.
 - **Uncrafted Weapons** (`CraftStar`): in the weapon crafting list, weapons you have never crafted get
   `>> ` in front of their name, in red, gold or purple (picked in the Mod Menu).
+- **Hunt Again** (`HuntAgain`, by RB): after a pursuit, the last end-of-hunt screen gets a HUNT AGAIN
+  button next to Continue (left click; R on the keyboard). It presses Continue and queues the same
+  pursuit again once you are back in Ramsgate. Off by default (`HuntAgain : 0`): switched on from the
+  launcher's Mods page or the in-game Mod Menu. Made and tested on CachyOS (Linux, Proton).
 
 - **PS5Icons**: PlayStation 5 button prompts and a DualSense picture for the Controls screen. They
   are not a UE4SS mod: the client DLL (`UndauntedInternalServer.dll`) shows them while a DualSense
   is connected. Based on "PS5 Button Icons and Controls" by Zacksly (CC BY 3.0, modified; see
   `PS5Icons/LICENSE.txt`).
 
-They only change what you see on your own screen. The game works without them.
+They only change your own game (Hunt Again also presses Continue and queues the hunt for you). The
+game works without them.
 
 ## How they get installed
 
@@ -25,7 +31,7 @@ They only change what you see on your own screen. The game works without them.
 - **Friend kit**: `friend-kit/setup.ps1` (skip with `-NoMods`).
 
 Both install only files whose SHA-256 matches `manifest.json`, and check them again after copying.
-`ue4ss/UE4SS-settings.ini` is written only when missing. Existing `mods.txt` switches are kept; new bundled mods are added and retired mods are disabled. Mods are Windows only: under Wine/Proton UE4SS is not loaded.
+`ue4ss/UE4SS-settings.ini` is written only when missing. Existing `mods.txt` switches are kept; new bundled mods are added and retired mods are disabled. Under Wine/Proton UE4SS loads only when the launcher is started with `WINEDLLOVERRIDES=dwmapi=n,b` (Wine otherwise uses its built-in `dwmapi.dll` instead of the UE4SS one next to the exe); the launcher's Mods page explains this and shows whether it is on.
 
 The launcher puts deleted files back before the next launch. To turn a mod off, use the Mod Menu or
 set it to 0 in `ue4ss/Mods/mods.txt` (that file is kept).

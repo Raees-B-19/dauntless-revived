@@ -9,6 +9,7 @@ import type {
   Branding,
   ExternalTarget,
   InviteCheck,
+  ModsState,
   NewsItem,
   OfflineStatus,
   RegisterOutcome,
@@ -71,6 +72,8 @@ const api = {
   takeInviteLink: (): Promise<string | null> => ipcRenderer.invoke(IPC.takeInviteLink),
   exportOfflineSave: (): Promise<ActionResult> => ipcRenderer.invoke(IPC.offlineExportSave),
   importOfflineSave: (): Promise<ActionResult> => ipcRenderer.invoke(IPC.offlineImportSave),
+  getMods: (): Promise<ModsState> => ipcRenderer.invoke(IPC.getMods),
+  setModSwitch: (name: string, on: boolean): Promise<ModsState> => ipcRenderer.invoke(IPC.setModSwitch, String(name), on === true),
   onSnapshot: (fn: (s: Snapshot) => void): void => {
     ipcRenderer.on(IPC.snapshot, (_e, s: Snapshot) => fn(s));
   },
