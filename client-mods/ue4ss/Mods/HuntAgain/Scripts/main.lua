@@ -1,5 +1,6 @@
 print("[HA] HuntAgain loading...\n")
 local UEHelpers = require("UEHelpers")
+local FrameTick = require("FrameTick")
 
 -- HuntAgain: after a pursuit, the last end-of-hunt screen gets a "Hunt again" button next to
 -- Continue and Leave hunt (keyboard: R). It presses Continue for you, and once you are back in
@@ -47,6 +48,7 @@ end
 
 local lastHunt = nil   -- the pursuit being played, remembered across the trip back to Ramsgate
 local pending = nil    -- the pursuit to queue once back in Ramsgate
+local pressedWall = nil -- os.time() of the press: wall clock, unlike the game's, survives the trip
 local ourLegend = nil  -- the button legend (button bar) that shows our button
 
 local function readHunt(pc)
@@ -55,6 +57,11 @@ local function readHunt(pc)
     if ok and id and id ~= "" and id ~= lastHunt then
         lastHunt = id
         log("hunt: " .. id)
+        -- A different hunt started before the queued one: never queue the old one later.
+        if pending and id ~= pending then
+            log("a different hunt started: hunt again for " .. pending .. " cancelled")
+            pending = nil
+        end
     end
 end
 
@@ -105,30 +112,26 @@ local function huntAgain()
     if pending or not showing(ourLegend) or not isPursuit(lastHunt) then return end
     local cont = findHint(ourLegend, isContinue)
     if not cont then log("no Continue button to press") return end
-    pending = lastHunt
+    pending, pressedWall = lastHunt, os.time()
     log("hunt again: " .. pending .. " - pressing Continue")
     pcall(function() cont:PressButton() end)
 end
 
--- Add our button to a legend that has Continue, after a pursuit. Deferred to the next game-thread
--- turn so it never runs inside the game's own legend update.
+-- Add our button to a showing legend that has Continue, after a pursuit. Runs inside the last
+-- end-of-hunt screen's CheckReady hook (game thread), never inside the game's own legend update.
 local function addTo(legend)
-    ExecuteWithDelay(100, function()
-        ExecuteInGameThread(function()
-            if pending or not valid(legend) or not isPursuit(lastHunt) then return end
-            if not findHint(legend, isContinue) or findHint(legend, isOurs) then return end
-            local ok, err = pcall(function() legend:AddButton({KeyName = FName(KEY)}, FText(LABEL)) end)
-            if ok then ourLegend = legend end
-            log(ok and ("button added for " .. lastHunt .. " (legend: " .. hintLabels(legend) .. ")")
-                or ("could not add button: " .. tostring(err)))
-        end)
-    end)
+    if pending or not valid(legend) or not isPursuit(lastHunt) then return end
+    if not findHint(legend, isContinue) or findHint(legend, isOurs) then return end
+    local ok, err = pcall(function() legend:AddButton({KeyName = FName(KEY)}, FText(LABEL)) end)
+    if ok then ourLegend = legend end
+    log(ok and ("button added for " .. lastHunt .. " (legend: " .. hintLabels(legend) .. ")")
+        or ("could not add button: " .. tostring(err)))
 end
 
 NotifyOnNewObject("/Script/Archon.EndHuntScreen", function() pcall(readHunt, partyClient()) end)
 
 -- The Continue button sits on a legend (button bar) that the game builds in advance and fills
--- without any hookable call, so look instead: once a second while on a pursuit island, check
+-- without any hookable call, so look instead: while the last end-of-hunt screen is up, check
 -- every showing legend and add ours next to a Continue. Each legend's buttons are logged when
 -- they change, to see what the game shows.
 local seen = {}
@@ -147,13 +150,6 @@ local function scan()
         end
     end
 end
-local function loop()
-    ExecuteWithDelay(1000, function()
-        ExecuteInGameThread(function() pcall(scan) end)
-        loop()
-    end)
-end
-loop()
 
 -- The game handles clicks on legend buttons natively, out of reach of Lua hooks, and the button's
 -- blueprint only has hover events. So a click is: left mouse button pressed while the pointer is
@@ -167,39 +163,95 @@ local function hovered(h)
     return ok and v
 end
 
-RegisterKeyBind(Key.LEFT_MOUSE_BUTTON, function()
-    ExecuteInGameThread(function()
-        local h = ourHint()
-        if h and hovered(h) then
-            log("button clicked")
-            huntAgain()
-        end
+-- Clicks and R arrive on UE4SS's input thread and only set a flag; the next CheckReady acts on it.
+-- Nothing here is queued with ExecuteInGameThread or ExecuteWithDelay, so Ctrl+R (hot reload)
+-- never leaves a call pointing into an unloaded script: the Mod Menu found that crashed the game.
+local clicked, rPressed = false, false
+RegisterKeyBind(Key.LEFT_MOUSE_BUTTON, function() clicked = true end)
+RegisterKeyBind(Key.R, function() rPressed = true end)
+
+-- Still on this screen this long after pressing Continue: the press did nothing, so hunt again is
+-- cancelled (otherwise the button never came back and any later trip to Ramsgate queued the hunt).
+-- Leaving the island took about 30 s in testing.
+local PRESS_TIMEOUT = 90
+local pressedAt = nil
+
+-- About every 0.3 s while the last end-of-hunt screen is up. A click or R from before the screen
+-- is dropped on the first call, before our button exists.
+local function onLastStage(self)
+    local okW, w = pcall(function() return self:get() end)
+    local now = FrameTick.Now(okW and w or nil)
+    if not pending then
+        pressedAt = nil
+    elseif not pressedAt then
+        pressedAt = now
+    elseif now and now - pressedAt > PRESS_TIMEOUT then
+        log("still on the end screen " .. PRESS_TIMEOUT .. " s after Continue: hunt again for " .. pending .. " cancelled")
+        pending, pressedAt = nil, nil
+    end
+    local click, r = clicked, rPressed
+    clicked, rPressed = false, false
+    local h = ourHint()
+    if h and click and hovered(h) then
+        log("button clicked")
+        huntAgain()
+    elseif h and r then
+        log("R pressed")
+        huntAgain()
+    end
+    scan()
+end
+
+-- The last end-of-hunt screen is a blueprint: its CheckReady can be hooked only once its class is
+-- loaded, which happens when the first such screen is built (or already, after a Ctrl+R).
+local LAST_STAGE = "/Game/UI/EndOfHunt/EndOfHunt_LastStage.EndOfHunt_LastStage_C"
+local lastStageHooked = false
+local function hookLastStage()
+    if lastStageHooked or not valid(StaticFindObject(LAST_STAGE .. ":CheckReady")) then return end
+    local ok, err = pcall(function()
+        RegisterHook(LAST_STAGE .. ":CheckReady", function(self) pcall(onLastStage, self) end)
     end)
-end)
-RegisterKeyBind(Key.R, function()
-    ExecuteInGameThread(function()
-        local h = ourHint()
-        log("R pressed" .. (h and "" or " (no button showing)"))
-        if h then huntAgain() end
-    end)
+    lastStageHooked = ok
+    log(ok and "watching the last end-of-hunt screen" or ("could not hook the last end-of-hunt screen: " .. tostring(err)))
+end
+pcall(hookLastStage)
+NotifyOnNewObject("/Script/UMG.UserWidget", function(w)
+    if lastStageHooked then return end
+    local ok, cls = pcall(function() return w:GetClass():GetFName():ToString() end)
+    if ok and cls == "EndOfHunt_LastStage_C" then pcall(hookLastStage) end
 end)
 
--- Back in Ramsgate: the player pawn spawns (ClientRestart), then queue the pursuit.
+-- Back in Ramsgate: the player pawn spawns (ClientRestart); about 3 s later, queue the pursuit.
+-- The wait runs on FrameTick (the HUD's per-frame hook, up in town) for the same Ctrl+R reason.
+-- Arriving more than DETOUR_LIMIT after the press means Continue did not bring the player here
+-- (they left some other way): cancelled, never queued. The direct trip took about 30 s.
+local DETOUR_LIMIT = 120
+local back = false      -- ClientRestart seen since Continue was pressed
+local backAt = nil      -- FrameTick time of the first town tick after it (same map clock)
 RegisterHook("/Script/Engine.PlayerController:ClientRestart", function()
-    if not pending then return end
-    local hunt = pending
-    ExecuteWithDelay(3000, function()
-        ExecuteInGameThread(function()
-            if pending ~= hunt or onIsland() then return end
-            local pc = partyClient()
-            if not pc then log("back in Ramsgate, but no party client") return end
-            local okM, busy = pcall(function() return pc:IsMatchmaking() end)
-            if okM and busy then log("already matchmaking, not queueing again") pending = nil return end
-            pending = nil
-            local ok, res = pcall(function() return pc:FindHunt(FName(hunt), false, FName("None")) end)
-            log("queued " .. hunt .. " ok=" .. tostring(ok) .. " result=" .. tostring(res))
-        end)
-    end)
+    if pending then back, backAt = true, nil end
 end)
+FrameTick.Every(0.5, "queue", function(t)
+    if not (pending and back) or onIsland() then return end
+    if not backAt then
+        backAt = t
+        if os.time() - (pressedWall or 0) > DETOUR_LIMIT then
+            log("back in Ramsgate more than " .. DETOUR_LIMIT .. " s after Continue: hunt again for " .. pending .. " cancelled")
+            pending, back = nil, false
+            return
+        end
+    end
+    if t - backAt < 3 then return end
+    back = false
+    local hunt = pending
+    local pc = partyClient()
+    if not pc then log("back in Ramsgate, but no party client") return end
+    local okM, busy = pcall(function() return pc:IsMatchmaking() end)
+    if okM and busy then log("already matchmaking, not queueing again") pending = nil return end
+    pending = nil
+    local ok, res = pcall(function() return pc:FindHunt(FName(hunt), false, FName("None")) end)
+    log("queued " .. hunt .. " ok=" .. tostring(ok) .. " result=" .. tostring(res))
+end)
+FrameTick.Start(log)
 
 log("HuntAgain loaded (pursuits only)")
