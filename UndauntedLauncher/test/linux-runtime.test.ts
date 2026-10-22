@@ -109,3 +109,25 @@ test("Linux runtime: creates the Proton compat-data directory before first initi
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("Linux runtime: creates the Wine prefix parent directory before first initialization", { skip: process.platform !== "linux" }, async () => {
+  const home = mkdtempSync(path.join(tmpdir(), "dr-linux-wine-init-"));
+  try {
+    const wine = executable(path.join(home, "custom", "wine64"));
+    const wineboot = path.join(home, "custom", "wineboot");
+    // Real Wine creates WINEPREFIX with a single non-recursive mkdir, so it fails when the parent is missing.
+    writeFileSync(wineboot, "#!/bin/sh\n/bin/mkdir \"$WINEPREFIX\" || exit 42\n/bin/mkdir \"$WINEPREFIX/drive_c\"\n");
+    chmodSync(wineboot, 0o755);
+    const userData = path.join(home, "data");
+    const prepared = await prepareLinuxGameLaunch(
+      userData,
+      { HOME: home, USER: "slayer", PATH: "", DAUNTLESS_REVIVED_WINE: wine },
+      home,
+      { autoInstallRuntime: false },
+    );
+    assert.equal(prepared.runtimeName, "Wine (custom)");
+    assert.equal(prepared.configDir, path.join(userData, "compat", "wine", "drive_c", "users", "slayer", "AppData", "Local", "Archon", "Saved", "Config", "WindowsClient"));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});

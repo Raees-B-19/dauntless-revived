@@ -205,6 +205,8 @@ async function initialize(runtime: DetectedLinuxRuntime, home: string): Promise<
     await run(runtime.command, ["run", "cmd", "/c", "exit"], runtime.env, home);
     return;
   }
+  // Wine creates WINEPREFIX with a single non-recursive mkdir, so its parent must already exist.
+  mkdirSync(path.dirname(runtime.prefixDir), { recursive: true });
   const beside = path.join(path.dirname(runtime.command), "wineboot");
   const wineboot = executable(beside) ? beside : fromPath("wineboot", runtime.env);
   if (wineboot) await run(wineboot, ["-u"], runtime.env, home);
